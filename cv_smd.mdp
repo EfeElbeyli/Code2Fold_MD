@@ -1,65 +1,145 @@
-title       = Umbrella pulling simulation 
-define      = -DPOSRES_B
-; Run parameters
-integrator  = md
-dt          = 0.002
-tinit       = 0
-nsteps      = 250000    ; 500 ps
-nstcomm     = 10
-; Output parameters
-nstxout     = 5000      ; every 10 ps
-nstvout     = 5000 
-nstfout     = 500
-nstxtcout   = 500       ; every 1 ps
-nstenergy   = 500
-; Bond parameters
+; ============================================================================
+;  Steered MD (SMD) – Constant-velocity pulling along +Z
+;  System: Protein in water, continuation from NPT
+;  Time  : 250000 steps × 0.002 ps = 500 ps = 0.5 ns
+; ============================================================================
+
+title                   = SMD constant-velocity pulling
+
+; Optional preprocessor definitions
+; -DPOSRES_B: Topology should contain a corresponding [ position_restraints ] block
+define                  = -DPOSRES_B
+
+; ============================================================================
+;  RUN PARAMETERS
+; ============================================================================
+
+integrator              = md          ; Velocity Verlet / leap-frog MD
+dt                      = 0.002       ; Time step (ps) = 2 fs
+tinit                   = 0
+nsteps                  = 250000      ; 500 ps total simulation time
+nstcomm                 = 10          ; Remove COM motion every 10 steps
+
+; Continuation from equilibrated NPT
+continuation            = yes         ; Read velocities from input, do not re-generate
+
+; ============================================================================
+;  OUTPUT CONTROL
+; ============================================================================
+
+nstxout                 = 5000        ; Write coordinates every 10 ps  (0.002*5000)
+nstvout                 = 5000        ; Write velocities every 10 ps
+nstfout                 = 500         ; Write forces every 1 ps
+nstxtcout               = 500         ; Write XTC every 1 ps
+nstenergy               = 500         ; Write energies every 1 ps
+nstlog                  = 500         ; Log output every 1 ps
+
+; ============================================================================
+;  NEIGHBOR SEARCHING / CUTOFFS
+; ============================================================================
+
+cutoff-scheme           = Verlet
+nstlist                 = 20          ; Neighbor list update frequency (>=20 with GPU)
+rlist                   = 1.4         ; Short-range neighborlist cutoff
+rcoulomb                = 1.4         ; Short-range Coulomb cutoff
+rvdw                    = 1.4         ; Short-range van der Waals cutoff
+
+; ns_type is obsolete with Verlet and is ignored by modern GROMACS
+; ns_type                = grid
+
+; ============================================================================
+;  BONDS / CONSTRAINTS
+; ============================================================================
+
 constraint_algorithm    = lincs
-constraints             = all-bonds
-continuation            = yes       ; continuing from NPT 
-; Single-range cutoff scheme
-cutoff-scheme   = Verlet
-nstlist         = 20 
-ns_type         = grid 
-rlist           = 1.4
-rcoulomb        = 1.4
-rvdw            = 1.4
-; PME electrostatics parameters
-coulombtype     = PME
-fourierspacing  = 0.12
-fourier_nx      = 0
-fourier_ny      = 0
-fourier_nz      = 0
-pme_order       = 4
-ewald_rtol      = 1e-5
-optimize_fft    = yes
-; Berendsen temperature coupling is on in two groups
-Tcoupl      = Nose-Hoover
-tc_grps     = Protein   non-Protein 
-tau_t       = 1.0       1.0
-ref_t       = 310       310
-; Pressure coupling is on
-Pcoupl          = Parrinello-Rahman 
-pcoupltype      = isotropic
-tau_p           = 1.0       
-compressibility = 4.5e-5
-ref_p           = 1.0
-refcoord_scaling = com
-; Generate velocities is off
-gen_vel     = no 
-; Periodic boundary conditions are on in all directions
-pbc     = xyz
-; Long-range dispersion correction
-DispCorr    = EnerPres
-; Pull code
+constraints             = all-bonds   ; All bonds constrained
+lincs_iter              = 1
+lincs_order             = 4
+
+; NOTE: Force field was parametrized with constraints = h-bonds, but
+;       all-bonds is often used for stability at 2 fs. Keep consistent
+;       within your workflow.
+
+; ============================================================================
+;  ELECTROSTATICS: PME
+; ============================================================================
+
+coulombtype             = PME
+fourierspacing          = 0.12
+fourier_nx              = 0
+fourier_ny              = 0
+fourier_nz              = 0
+pme_order               = 4
+ewald_rtol              = 1e-5
+optimize_fft            = yes
+
+; ============================================================================
+;  TEMPERATURE COUPLING
+; ============================================================================
+
+; Nose–Hoover thermostat on two T-coupling groups
+tcoupl                  = Nose-Hoover
+tc-grps                 = Protein   non-Protein
+tau_t                   = 1.0       1.0
+ref_t                   = 310       310    ; Target temperature (K)
+
+; ============================================================================
+;  PRESSURE COUPLING
+; ============================================================================
+
+; Parrinello–Rahman barostat – appropriate for production / SMD
+pcoupl                  = Parrinello-Rahman
+pcoupltype              = isotropic
+tau_p                   = 1.0
+compressibility         = 4.5e-5
+ref_p                   = 1.0
+refcoord_scaling        = com       ; Scale reference coords with COM
+
+; ============================================================================
+;  VELOCITY GENERATION
+; ============================================================================
+
+; We continue from NPT, so velocities come from input.
+gen_vel                 = no
+
+; ============================================================================
+;  PERIODIC BOUNDARY CONDITIONS / DISPERSION CORRECTION
+; ============================================================================
+
+pbc                     = xyz
+DispCorr                = EnerPres   ; Long-range dispersion correction
+
+; ============================================================================
+;  PULL CODE – CONSTANT-VELOCITY SMD ALONG +Z
+; ============================================================================
+
+; SMD setup:
+; - Two groups: N_CA (N-terminal Cα), C_CA (C-terminal Cα)
+; - Harmonic potential whose reference distance increases at constant velocity
+; - Pulling only along Z
+
 pull                    = yes
-pull_ncoords            = 1         ; only one reaction coordinate 
-pull_ngroups            = 2         ; two groups defining one reaction coordinate 
-pull_group1_name        = N_CA 
-pull_group2_name        = C_CA 
-pull_coord1_type        = umbrella  ; harmonic potential
-pull_coord1_geometry    = distance  ; simple distance increase 
-pull_coord1_dim         = N N Y
+pull_ncoords            = 1           ; One reaction coordinate
+pull_ngroups            = 2           ; Two groups define the coordinate
+
+pull_group1_name        = N_CA        ; First group  (defined in index.ndx)
+pull_group2_name        = C_CA        ; Second group (defined in index.ndx)
+
+; Geometry of the reaction coordinate
+pull_coord1_type        = umbrella    ; Moving harmonic potential (SMD)
+pull_coord1_geometry    = distance    ; COM distance between group1 and group2
+pull_coord1_dim         = N N Y       ; Only pull along Z
 pull_coord1_groups      = 1 2
-pull_coord1_start       = yes       ; define initial COM distance > 0
-pull_coord1_rate        = 0.1      ; 0.01 nm per ps = 10 nm per ns
-pull_coord1_k           = 1000      ; kJ mol^-1 nm^-2
+pull_coord1_start       = yes         ; Take initial COM distance from t = 0
+
+; Pulling rate (constant velocity)
+; 0.001 nm/ps = 1 nm/ns → dengeli ve yaygın kullanılan SMD hızı
+; Daha yavaş (0.0005) = daha fiziksel, daha hızlı (0.002–0.005) = daha agresif
+pull_coord1_rate        = 0.001       ; 1 nm/ns (önerilen değer)
+
+; Spring constant of the pulling potential
+pull_coord1_k           = 1000        ; kJ mol^-1 nm^-2
+
+; ============================================================================
+;  END OF FILE
+; ============================================================================
